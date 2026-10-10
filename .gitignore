@@ -1,0 +1,23 @@
+# deps / build
+node_modules
+.next
+out
+*.tsbuildinfo
+
+# env
+.env
+.env*.local
+
+# editor / os
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+
+# deploy
+.vercel
+
+# local-only scratch (kept on disk, never in the repo)
+_backups/
+_old-draft/
+_to_delete/
