@@ -5,6 +5,32 @@ follows [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org) (see the **Versioning** section in `README.md`
 for what counts as a major/minor/patch change here).
 
+## [1.2.0] — 2026-10-11
+
+### Changed
+- Face portrait rebuilt for likeness: every facet now carries the real colour
+  sampled from the photo (skin, eyes, brows, moustache, lips, hair), detail is
+  concentrated where faces are recognised (extra facets on the photo's edges,
+  a fine grid inside the eyes, adaptive splitting), hairline and hair outline are
+  traced from the photo, ears/neck measured from it. ~4,300 facets.
+- Portrait shown closer to front-on with a longer-lens camera (less distortion).
+- Boot screen: explicit "Enter the map" button; slower headline typing,
+  checklist and facet assembly.
+
+## [1.1.0] — 2026-10-10
+
+### Added
+- Faceted 3D portrait on the right half of the boot screen, built from ~1,000
+  flat-shaded planes fitted to a photo (face landmarks + generated hair, ears,
+  neck). Facets fly in and assemble as the boot lines load, then the head turns
+  gently toward the cursor. Palette-aware colours.
+- `scripts/face/` with the mesh builder and preview tool.
+
+### Changed
+- Boot screen: "Mapping components → Siddarth" types in as a large headline,
+  then the POST checklist; ends on "All parts mapped. Meet Siddarth."
+- Boot screen waits for a click or key press instead of auto-entering the map.
+
 ## [1.0.0] — 2026-10-10
 
 First end-deployment build, rebuilt from the original single-file draft

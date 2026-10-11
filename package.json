@@ -1,9 +1,10 @@
 {
   "name": "siddarth-portfolio",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "start:dev": "next dev",
     "build": "next build",
     "start": "next start",
     "preview:export": "cross-env PREVIEW_EXPORT=1 next build && node scripts/fix-preview.mjs",

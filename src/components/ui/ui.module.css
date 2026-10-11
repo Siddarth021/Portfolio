@@ -205,11 +205,38 @@
   cursor: pointer;
 }
 .bootGone { opacity: 0; pointer-events: none; }
-.bootInner { width: min(460px, 100%); font: 400 13.5px/1.9 var(--mono); color: var(--muted); }
+.bootGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 560px) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(24px, 4vw, 72px);
+  width: min(1320px, 100%);
+  height: 100%;
+}
+.bootFace { position: relative; height: min(86vh, 860px); min-height: 360px; }
+.bootFace > div { position: absolute !important; inset: -10% -12% -10% -18%; width: auto !important; height: auto !important; pointer-events: none; }
+.bootInner { width: min(560px, 100%); font: 400 16.5px/2 var(--mono); color: var(--muted); justify-self: end; }
+@media (max-width: 900px) {
+  .bootGrid { grid-template-columns: 1fr; grid-template-rows: 38vh auto; align-content: center; gap: 8px; }
+  .bootFace { order: -1; height: 38vh; min-height: 0; }
+  .bootInner { justify-self: center; }
+}
 .bootInner b { color: var(--accent); font-weight: 500; }
-.bootHello { margin-top: 14px; font: 800 clamp(30px, 6vw, 46px)/1.05 var(--sans); letter-spacing: -0.02em; color: var(--ink); animation: pop 0.5s ease-out; }
+.bootLine { animation: bootRise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes bootRise { from { opacity: 0; transform: translateY(6px); } }
+.bootMap {
+  margin: 4px 0 18px;
+  font: 700 clamp(26px, 4.6vw, 38px)/1.2 var(--sans);
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+.bootMapOk { margin-left: 12px; font: 500 14px/1 var(--mono); color: var(--accent); vertical-align: middle; }
+.caret { display: inline-block; width: 0.07em; height: 0.85em; margin-left: 4px; vertical-align: -0.08em; background: var(--accent); animation: blink 0.9s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.bootHello { margin-top: 18px; font: 800 clamp(36px, 7vw, 56px)/1.05 var(--sans); letter-spacing: -0.02em; color: var(--ink); animation: pop 0.5s ease-out; }
 .bootHello em { font-style: normal; color: var(--accent); }
-.skip { margin-top: 22px; font-size: 12px; color: var(--muted); }
+.bootEnter { margin-top: 28px; padding: 13px 22px; font-size: 14.5px; }
+.skip { margin-top: 12px; font-size: 13px; color: var(--muted); }
 
 @media (max-width: 700px) {
   .panel {
@@ -233,5 +260,5 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .panel, .boot { transition: none; }
-  .card, .role, .palMenu, .bootHello { animation: none; }
+  .card, .role, .palMenu, .bootHello, .bootLine, .caret { animation: none; }
 }

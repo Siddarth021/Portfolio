@@ -46,6 +46,8 @@ src/
     ui/                 Boot screen, brand header, palette switch
       StopPanel.tsx      Side panel shell (header / scrollable body / nav)
       blocks/Blocks.tsx  Renders a stop's Block[] (one layout per type)
+    face/               Faceted head on the boot screen (+ faceMesh.json)
+scripts/face/           How faceMesh.json was generated (landmarks + builder)
 scripts/fix-preview.mjs Fixes font paths in the static preview
 ```
 
@@ -81,6 +83,32 @@ render, so a new stop never needs new UI code:
 The planned next step replaces this file with a Supabase table and a private
 `/admin` page, so projects/skills/positions can be added from a form instead
 of code — see **Versioning** below for how that fits in without a rewrite.
+
+## The faceted face on the start page
+
+`src/components/face/FacePortrait.tsx` renders your head as ~4,300 flat facets and
+assembles it while the boot lines load. Geometry and colours live in
+`faceMesh.json` next to it, generated once from a front-facing photo by
+`scripts/face/build_face.py`:
+
+1. **Landmarks:** 478 face points with estimated depth from MediaPipe Face Mesh,
+   saved as `scripts/face/landmarks.json` (detected on the photo upscaled 2x).
+2. **Face:** every landmark, plus extra points along the photo's strong edges
+   (eyelids, brows, lips, moustache, nostrils) and a fine grid inside each eye,
+   cut into flat triangles.
+3. **Head:** hair, ears and neck generated around the face; the hairline and hair
+   outline are traced from the photo.
+4. **Colour:** each facet takes the average colour of the photo pixels it covers;
+   facets the photo can't see (back of the head) copy their nearest neighbours.
+   Facets covering a lot of colour change are split into 4 (up to 3 times), so
+   detailed areas get small facets and smooth skin keeps big ones.
+
+To regenerate (e.g. with a new photo): upscale the photo 2x to `photo_big.png`,
+detect landmarks on that same image, then run
+`python3 build_face.py photo_big.png landmarks.json out.json` inside
+`scripts/face/` and copy `out.json` over `src/components/face/faceMesh.json`.
+`preview.py out.json preview.png` draws a quick 4-angle check. The photo itself
+is not stored in the repo.
 
 ## Adding a new 3D part
 
