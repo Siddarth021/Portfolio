@@ -48,7 +48,7 @@ function Stop({ i, n, data }: { i: number; n: number; data: StopData }) {
         <Cyl r={PAD_RADIUS} r2={PAD_RADIUS + 0.15} h={0.3} p={[0, 0.15, 0]} m={m.pad} seg={56} />
         <Cyl r={PAD_RADIUS - 0.35} h={0.02} p={[0, 0.31, 0]} m={m.groundEdge} seg={56} />
         <group ref={model} position={[0, 0.31, 0]} scale={1.3}>
-          <Part count={modelCount(data)} active={active} />
+          <Part count={modelCount(data)} active={active} data={data} />
         </group>
       </group>
 

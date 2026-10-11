@@ -1,9 +1,12 @@
 'use client';
 import { useMemo } from 'react';
 import { Box, Many, range, useMats, type V3 } from './kit';
+import type { PartProps } from './index';
+import SkillBalls, { type BallGroup } from './SkillBalls';
 
-/** Skills: an open CPU die. One core per skill group, with a shared cache strip. */
-export default function Cores({ count = 4 }: { count?: number }) {
+/** Skills: an open CPU die. One core per skill group, with a shared cache strip.
+ *  At the stop, every skill floats over its core as a ball you can play with. */
+export default function Cores({ count = 4, active = false, data }: PartProps) {
   const m = useMats();
   const { cores, cells, pads, size } = useMemo(() => {
     const cols = Math.ceil(Math.sqrt(count));
@@ -28,6 +31,12 @@ export default function Cores({ count = 4 }: { count?: number }) {
     return { cores, cells, pads, size };
   }, [count]);
 
+  const groups = useMemo<BallGroup[]>(() => {
+    const b = data?.blocks.find((x) => x.type === 'skills');
+    if (!b || b.type !== 'skills') return [];
+    return b.groups.map((g, i) => ({ name: g.name, skills: g.skills, at: [cores[i % cores.length][0], cores[i % cores.length][2]] }));
+  }, [data, cores]);
+
   return (
     <group>
       <Box s={[3.3, 0.16, 3.3]} p={[0, 0.08, 0]} m={m.pcb} />
@@ -40,6 +49,7 @@ export default function Cores({ count = 4 }: { count?: number }) {
         <Box key={i} s={[size, 0.06, size]} p={c} m={m.accent} />
       ))}
       <Many s={[size / 4.2, 0.03, size / 4.2]} at={cells} m={m.white} />
+      {groups.length > 0 && <SkillBalls groups={groups} active={active} />}
     </group>
   );
 }

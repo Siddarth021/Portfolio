@@ -5,6 +5,29 @@ follows [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org) (see the **Versioning** section in `README.md`
 for what counts as a major/minor/patch change here).
 
+## [1.3.0] — 2026-10-11
+
+### Changed
+- Face portrait: hair, ears and neck rebuilt for likeness (~11,600 facets).
+  - Hair: 4x finer around the head, hairline traced column by column from the
+    photo, outline fitted to the photo's hair silhouette in finer steps, ~30 locks
+    that run back from the hairline with a sheen along each, crisper hairline colour.
+  - Ears: each ear's height and how far it sticks out measured row by row from the
+    photo; shaped with helix rim, antihelix ridge, concha, lobe and a back.
+  - Neck: width per height measured from the photo, throat and neck-muscle ridges,
+    a flare toward the shoulders and a V-shaped cut; shirt collar and its shadow no
+    longer leak into the skin colour.
+- Camera moved a little closer so the head keeps its size with the longer neck.
+- Face portrait is now a bust: shoulders, chest, the shirt's collar (stand + both
+  collar points traced from the photo) and the top button, coloured from the photo
+  (~16,300 facets).
+
+### Added
+- Skills stop: every skill floats over its CPU core as a ball with its logo. Balls
+  rise out of the cores when the stop opens and bob gently; hover to lift one and
+  see its name, click to bounce it, drag to throw it — it springs back and knocks
+  the others aside (`components/parts/SkillBalls.tsx`, no physics library).
+
 ## [1.2.0] — 2026-10-11
 
 ### Changed

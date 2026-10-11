@@ -1,13 +1,22 @@
-"""Faceted head v2 — fitted to one front photo, coloured from it.
+"""Faceted head — fitted to one front photo, coloured from it.
 
-1. Face: all 468 face-mesh landmarks (+ visible iris points), Delaunay-cut in a
-   cylindrical unwrap, lifted with the model's depth (nose relief boosted a bit).
-2. Head: lofted from the face oval around an ellipsoid; hair thickness only where
-   the photo shows hair; upper silhouette scaled to match the photo's hair outline.
-3. Ears + neck placed and sized from photo measurements.
-4. Colour: z-buffer the mesh in the photo's front view, each facet takes the mean
-   of the photo pixels it covers (background + shirt excluded). Facets hidden in
-   the photo (back of head, under the jaw) borrow from the nearest similar facets.
+1. Face: all 468 face-mesh landmarks (+ visible iris points) plus extra points on the
+   photo's strong edges, Delaunay-cut in a cylindrical unwrap, lifted with the model's
+   depth (nose relief boosted a bit).
+2. Hair: a shell lofted from the face oval toward the back of the skull, 144 columns x
+   15 hair rows. The hairline is traced from the photo column by column, the outline is
+   fitted to the photo's hair silhouette, and the surface carries ~30 locks (ridges that
+   run back from the hairline, twisting the way the hair sweeps).
+3. Ears: height and how far each ear sticks out, row by row, measured from the photo;
+   the side shape (helix rim, antihelix, concha, lobe, tragus) from an ear template.
+4. Neck: width per height measured from the photo, with throat, neck-muscle ridges,
+   a flare toward the shoulders and a V-shaped cut.
+5. Colour: z-buffer the mesh in the photo's front view, each facet takes the average of
+   the photo pixels it covers (background, shirt and collar shadow excluded). Facets
+   the photo can't see borrow from the nearest facets of the same kind (hair, ear,
+   neck, skin); hidden hair uses the photo's hair colour with a sheen along each lock.
+   Facets over a lot of colour change (eyes, brows, lips, hairline) are split into 4,
+   up to 3 times.
 
 usage: python3 build_face.py photo_big.png landmarks.json out.json
 """
@@ -203,6 +212,8 @@ def slerp(a, b, t):
 
 def hairy(pt):
     """does this head-surface point carry hair?"""
+    if pt[1] < ear_bottom_y:                    # no hair below the ear lobes (dark collar/jaw shadow is not hair)
+        return False
     if pt[2] > z_ear - 0.05 * half_w:          # front half: ask the photo
         x, y = px(pt)
         return bool(hair[y, x]) or (not head[y, x] and pt[1] > P[234][1])
@@ -211,14 +222,18 @@ def hairy(pt):
     return pt[1] > ear_bottom_y                 # behind the ears: hair down to ear bottom
 
 
-K = 12
-KH = 3          # ring index that sits exactly on the hairline
+nO = len(OVAL)
+M = 4                       # shell columns per face-oval segment (fine hairline + many locks)
+NCOL = M * nO
+KH = 3                      # ring index that sits exactly on the hairline
+K = KH + 15                 # 15 hair rows
 back = np.array([0.0, 0.18, -1.0]); back /= np.linalg.norm(back)
-NCOL = 2 * len(OVAL)
 
 
 def col_base(bi):
-    return P[OVAL[bi // 2]] if bi % 2 == 0 else (P[OVAL[bi // 2]] + P[OVAL[(bi // 2 + 1) % len(OVAL)]]) / 2
+    i, f = divmod(bi, M)
+    f /= M
+    return P[OVAL[i]] * (1 - f) + P[OVAL[(i + 1) % nO]] * f
 
 
 def loft(p, t):
@@ -253,12 +268,25 @@ t_hair = np.zeros(NCOL)
 for bi in range(NCOL):
     p = col_base(bi)
     th = 1.0
-    for tt in np.linspace(0.0, 1.0, 121)[1:]:
+    for tt in np.linspace(0.0, 1.0, 241)[1:]:
         if hairy(loft(p, tt)[0]):
             th = tt; break
     t_hair[bi] = th
-t_hair = ndimage.median_filter(t_hair, size=3, mode='wrap')
+t_hair = ndimage.median_filter(t_hair, size=5, mode='wrap')
+t_hair = ndimage.uniform_filter1d(t_hair, 3, mode='wrap')
 t_hair = np.clip(t_hair, 0.03, 0.97)
+
+# hair locks: ridges that run from the hairline back over the crown, twisting a little
+# the way the photo's hair sweeps (toward the viewer's left at the front)
+LOCKS = 30
+rng_h = np.random.default_rng(11)
+lock_of = {}
+
+
+def lock_value(bi, tt):
+    ph = 2 * math.pi * LOCKS * bi / NCOL + 2.4 * tt + 0.7 * math.sin(6.0 * tt + bi * 0.23)
+    return (0.5 + 0.5 * math.cos(ph)) ** 1.5
+
 
 rings = [[sel_idx[i] for i in OVAL]]
 shell_ids = []
@@ -269,24 +297,29 @@ for k in range(1, K + 1):
         if k <= KH:                       # skin rows, evenly up to the hairline
             t = th * k / KH
         else:                             # hair rows, denser near the hairline
-            t = th + (1 - th) * ((k - KH) / (K - KH)) ** 1.4
+            t = th + (1 - th) * ((k - KH) / (K - KH)) ** 1.3
         pt, dv, A = loft(col_base(bi), t)
         pt = clamp_jaw(pt)
         if k > KH:
             up = max(0.0, dv[1]); front = max(0.0, dv[2])
-            pt = pt + (A * dv / np.linalg.norm(A * dv)) * half_w * (
-                0.04 + 0.26 * up ** 0.8 + 0.13 * abs(dv[0]) * min(1.0, max(0.0, (dv[1] - 0.12) / 0.35)) + 0.22 * up * front)
+            nrm_ = A * dv / np.linalg.norm(A * dv)
+            thick = 0.04 + 0.26 * up ** 0.8 + 0.13 * abs(dv[0]) * min(1.0, max(0.0, (dv[1] - 0.12) / 0.35)) + 0.22 * up * front
+            tt_ = (k - KH) / (K - KH)
+            lv = lock_value(bi, tt_)
+            amp = 0.05 * min(1.0, (k - KH) / 1.5) * (1 - tt_) ** 0.7
+            pt = pt + nrm_ * half_w * (thick + amp * (lv - 0.5)) + rng_h.normal(0, 0.006 * half_w, 3)
+            lock_of[len(verts)] = lv
         verts.append(pt.tolist()); ring.append(len(verts) - 1); shell_ids.append(len(verts) - 1)
     rings.append(ring)
 
-# fit the upper silhouette to the photo's head outline (front view, radial)
+# fit the upper silhouette to the photo's head outline (front view, radial, fine bins)
 O2 = np.array([cx, P[234][1]])
 ys, xs = np.nonzero(head)
 hy = -ys.astype(float)
 ang_pix = np.arctan2(hy - O2[1], xs - O2[0])
 rad_pix = np.hypot(xs - O2[0], hy - O2[1])
 upper = hy > O2[1] - 0.05 * half_w
-NB = 20
+NB = 44
 bins = np.linspace(0, math.pi, NB + 1)
 target = np.zeros(NB)
 for b in range(NB):
@@ -302,7 +335,7 @@ for b in range(NB):
     m = (ang >= bins[b]) & (ang < bins[b + 1])
     cur[b] = rad[m].max() if m.any() else 0
 scale = np.where((cur > 0) & (target > 0), target / np.maximum(cur, 1e-6), 1.0)
-scale = np.clip(ndimage.uniform_filter1d(np.clip(scale, 0.8, 1.25), 5, mode='nearest'), 0.85, 1.2)
+scale = np.clip(ndimage.uniform_filter1d(np.clip(scale, 0.8, 1.25), 3, mode='nearest'), 0.85, 1.2)
 centers = (bins[:-1] + bins[1:]) / 2
 for j, v in enumerate(sid):
     a = ang[j]
@@ -317,25 +350,30 @@ for j, v in enumerate(sid):
     verts[v][1] = O2[1] + (verts[v][1] - O2[1]) * s
 
 Vn = np.array(verts)
-nO = len(OVAL)
 
 
 def band_tris(k):
     r0, r1 = rings[k], rings[k + 1]
     out = []
-    if k == 0:   # 36 oval points -> 72 ring points
+    if k == 0:   # 36 oval points -> NCOL ring points
         for i in range(nO):
             j = (i + 1) % nO
-            a0, a1, a2 = r1[2 * i], r1[2 * i + 1], r1[(2 * i + 2) % (2 * nO)]
-            out += [[r0[i], a0, a1], [r0[i], a1, r0[j]], [r0[j], a1, a2]]
+            for m in range(M):
+                piv = r0[i] if m < M // 2 else r0[j]
+                out.append([piv, r1[M * i + m], r1[(M * i + m + 1) % NCOL]])
+            out.append([r0[i], r1[M * i + M // 2], r0[j]])
     else:
-        n2 = 2 * nO
-        for i in range(n2):
-            j = (i + 1) % n2
-            out += [[r0[i], r1[i], r1[j]], [r0[i], r1[j], r0[j]]]
+        for i in range(NCOL):
+            j = (i + 1) % NCOL
+            if (i + k) % 2:      # alternate the diagonal so the cut looks hand-made, not gridded
+                out += [[r0[i], r1[i], r1[j]], [r0[i], r1[j], r0[j]]]
+            else:
+                out += [[r0[i], r1[i], r0[j]], [r0[j], r1[i], r1[j]]]
     return out
 
 
+band = [-1] * len(tris)          # shell ring band per facet (-1 = not shell)
+part = ['face'] * len(tris)
 for k in range(K):
     is_hair_band = k >= KH
     for t in band_tris(k):
@@ -346,51 +384,169 @@ for k in range(K):
         cen = (a + b + c) / 3
         if nrm @ (cen - C) < 0:
             t = [t[0], t[2], t[1]]
-        tris.append(t); region.append(1 if is_hair_band else 0)
+        tris.append(t); region.append(1 if is_hair_band else 0); band.append(k); part.append('shell')
 
-# ---------------- ears (measured: top ~ y345, bottom ~ y485, ~50px out) ----------------
+# ---------------- ears: outline measured from the photo, anatomy from a template ----------------
+# front view gives each ear's height and how far it sticks out at every height; the side
+# shape (helix rim, antihelix ridge, concha bowl, lobe, tragus) comes from a generic ear.
+skin_px = head & ~hair
+oval_px = np.array([[P[i][0], -P[i][1]] for i in OVAL])
+oval_path_px = Path(oval_px)
+ear_r = {}       # per-facet ring position (for concha tint)
+EAR_TPL = np.array([
+    (0.10, 0.80), (0.18, 0.95), (0.35, 1.00), (0.55, 0.98), (0.72, 0.90), (0.85, 0.76), (0.91, 0.60),
+    (0.89, 0.45), (0.81, 0.32), (0.69, 0.20), (0.58, 0.10), (0.45, 0.02), (0.32, 0.00), (0.21, 0.05),
+    (0.13, 0.15), (0.09, 0.27), (0.05, 0.36), (0.03, 0.47), (0.06, 0.58), (0.08, 0.70)])
+EAR_C = np.array([0.30, 0.47])          # concha centre
+NE = 44
+# resample the template outline evenly by arc length (closed)
+_tp = np.vstack([EAR_TPL, EAR_TPL[:1]])
+_seg = np.hypot(*np.diff(_tp, axis=0).T); _cum = np.r_[0, np.cumsum(_seg)]
+_s = np.linspace(0, _cum[-1], NE, endpoint=False)
+ear_out = np.c_[np.interp(_s, _cum, _tp[:, 0]), np.interp(_s, _cum, _tp[:, 1])]
+# rearmost u of the outline at each height (to spread the photo's protrusion front -> back)
+_vg = np.linspace(0, 1, 41)
+_ub = np.array([ear_out[np.abs(ear_out[:, 1] - v) < 0.08, 0].max() if (np.abs(ear_out[:, 1] - v) < 0.08).any() else 0.3 for v in _vg])
+E_RINGS = [0.0, 0.2, 0.38, 0.52, 0.66, 0.80, 0.90, 1.0]
+E_RELIEF = [-0.045, -0.04, -0.01, 0.045, 0.03, 0.0, 0.045, 0.02]     # x ear height, outward
+
+
+def oval_x(ypix, side):
+    """face-oval x at photo row ypix on one side"""
+    xs_ = []
+    for i in range(len(oval_px)):
+        a_, b_ = oval_px[i], oval_px[(i + 1) % len(oval_px)]
+        if (a_[1] - ypix) * (b_[1] - ypix) <= 0 and a_[1] != b_[1]:
+            xs_.append(a_[0] + (ypix - a_[1]) / (b_[1] - a_[1]) * (b_[0] - a_[0]))
+    if not xs_:
+        return cx + side * half_w
+    return min(xs_) if side < 0 else max(xs_)
+
+
 def add_ear(side):
     tr = P[234] if side < 0 else P[454]
-    top_y = tr[1] + 0.30 * half_w
-    bot_y = tr[1] - 0.55 * half_w
-    x0 = tr[0] - side * 0.03 * half_w
-    zf = tr[2] - 0.05 * half_w
-    depth, flare = 0.42 * half_w, 0.33 * half_w
-    outline = [(0.05, 1.00, 0.35), (0.45, 1.05, 0.75), (0.85, 0.85, 1.00), (1.00, 0.50, 1.00),
-               (0.90, 0.10, 0.85), (0.60, -0.25, 0.65), (0.30, -0.45, 0.45), (0.05, -0.30, 0.20),
-               (0.00, 0.30, 0.15)]
-    inner = [(0.45, 0.55, 0.45), (0.50, 0.15, 0.40)]
+    yc = int(-tr[1])
+    rows, outer = [], []
+    for y in range(yc - 90, yc + 140):
+        xr = oval_x(y, side)
+        xs_ = np.nonzero(skin_px[y])[0]
+        xs_ = xs_[(xs_ < xr - 2)] if side < 0 else xs_[(xs_ > xr + 2)]
+        if len(xs_) < 12:          # thin anti-aliased edge lines above the ear are not ear
+            continue
+        # contiguous run touching the face edge only
+        o = xs_.min() if side < 0 else xs_.max()
+        prot = abs(o - xr)
+        if prot > 6:
+            rows.append(y); outer.append(abs(o - cx))
+    rows = np.array(rows); outer = ndimage.median_filter(np.array(outer, float), 5)
+    y_top, y_bot = rows.min(), rows.max()
+    h = y_bot - y_top
+    print(f'ear {side:+d}: rows {y_top}-{y_bot} (h={h}), max out {outer.max() - abs(tr[0] - cx):.0f}px')
+    l = 0.60 * h
+    z_root = tr[2] - 0.06 * half_w
+
+    def din(ypix):
+        return abs(oval_x(ypix, side) - cx) - 0.05 * half_w
+
+    def dout(ypix):
+        return max(din(ypix) + 2, np.interp(ypix, rows, outer))
+
+    def place(u, v, rel):
+        ypix = y_bot - v * h
+        f = min(1.0, u / max(0.12, np.interp(v, _vg, _ub))) ** 0.85
+        lat = din(ypix) + (dout(ypix) - din(ypix)) * f + rel * h
+        lat = max(lat, din(ypix) - 0.01 * half_w)
+        return [cx + side * lat, -ypix, z_root - u * l]
+
     base = len(verts)
-    for u, v, w in outline + inner:
-        y = bot_y + (top_y - bot_y) * (v + 0.45) / 1.5
-        verts.append([x0 + side * w * flare, y, zf - u * depth])
-    no = len(outline); c1, c2 = base + no, base + no + 1
-    fan = [(0, 1, c1), (1, 2, c1), (2, 3, c1), (3, c2, c1), (3, 4, c2), (4, 5, c2), (5, 6, c2),
-           (6, 7, c2), (7, 8, c2), (8, c1, c2), (8, 0, c1)]
+    grid = []
+    for ri, r in enumerate(E_RINGS):
+        if r == 0:
+            verts.append(place(EAR_C[0], EAR_C[1], E_RELIEF[0])); grid.append([len(verts) - 1] * NE); continue
+        ring = []
+        for s in range(NE):
+            u, v = EAR_C + r * (ear_out[s] - EAR_C)
+            verts.append(place(u, v, E_RELIEF[ri])); ring.append(len(verts) - 1)
+        grid.append(ring)
+    # back sheet: from the rim to where the ear roots into the head
+    root = []
+    for s in range(NE):
+        u, v = ear_out[s]
+        ypix = y_bot - v * h
+        verts.append([cx + side * (din(ypix) - 0.03 * half_w), -ypix, z_root - u * l * 0.45]); root.append(len(verts) - 1)
     Vt = np.array(verts)
-    for a, b, c in fan:
-        t = [base + a if a < no else a, base + b if b < no else b, base + c if c < no else c]
-        nn = np.cross(Vt[t[1]] - Vt[t[0]], Vt[t[2]] - Vt[t[0]])
-        if nn[0] * side < 0:
+
+    def put(t, outward, rpos):
+        a, b, c = Vt[t]
+        nn = np.cross(b - a, c - a)
+        if np.linalg.norm(nn) < 1e-4:
+            return
+        if nn @ outward < 0:
             t = [t[0], t[2], t[1]]
-        tris.append(t); region.append(6)
+        tris.append(t); region.append(6); band.append(-1); part.append('ear'); ear_r[len(tris) - 1] = rpos
+
+    lateral = np.array([side, 0.0, 0.0])
+    for ri in range(len(E_RINGS) - 1):
+        r0_, r1_ = grid[ri], grid[ri + 1]
+        rp = (E_RINGS[ri] + E_RINGS[ri + 1]) / 2
+        for s in range(NE):
+            s2 = (s + 1) % NE
+            if ri == 0:
+                put([r0_[0], r1_[s], r1_[s2]], lateral, rp)
+            else:
+                put([r0_[s], r1_[s], r1_[s2]], lateral, rp)
+                put([r0_[s], r1_[s2], r0_[s2]], lateral, rp)
+    rim = grid[-1]
+    for s in range(NE):
+        s2 = (s + 1) % NE
+        put([rim[s], root[s], root[s2]], np.array([0, 0, -1.0]), 2.0)
+        put([rim[s], root[s2], rim[s2]], np.array([0, 0, -1.0]), 2.0)
 
 
 add_ear(-1); add_ear(1)
 
-# ---------------- neck (measured: ~276px wide under the jaw, slimming a little) ----------------
+# ---------------- neck: width per height measured from the photo ----------------
 chin = P[152]
-neck_top = chin[1] + 0.35 * half_w
-neck_bot = chin[1] - 0.62 * half_w
-nz = z_ear + 0.10 * half_w
-rx, rz = 0.78 * half_w, 0.60 * half_w
-SIDES = 12
+nm_rows, nm_hw, nm_cx = [], [], []
+for y in range(560, 711, 5):
+    xs_ = np.nonzero(skin_px[y])[0]
+    if len(xs_) < 50:
+        continue
+    nm_rows.append(y); nm_hw.append((xs_.max() - xs_.min()) / 2); nm_cx.append((xs_.max() + xs_.min()) / 2)
+nm_rows = np.array(nm_rows); nm_hw = ndimage.median_filter(np.array(nm_hw), 5)
+ncx = float(np.median(nm_cx))
+print(f'neck: rows {nm_rows.min()}-{nm_rows.max()}, half width {nm_hw.min():.0f}-{nm_hw.max():.0f}, centre x {ncx:.0f}')
+z_ear0 = z_ear
+nz0 = z_ear0 + 0.10 * half_w
+Y_CUT = 785.0
+# (photo row, width factor, half width source row)
+LEVELS = [(470, 0.70, 575), (505, 0.80, 575), (540, 0.92, 575), (562, 0.98, 575), (580, 1.0, None),
+          (596, 1.0, None), (612, 1.0, None), (630, 1.0, None), (650, 1.0, None), (672, 1.0, None), (695, 1.0, None), (725, 1.02, 700), (752, 1.10, 700),
+          (772, 1.20, 700), (Y_CUT, 1.28, 700)]
+SIDES = 36
 nrings = []
-for y, sx, dz in [(neck_top, 0.95, 0.10 * half_w), (chin[1] - 0.22 * half_w, 0.93, 0.04 * half_w), (neck_bot, 1.02, 0.12 * half_w)]:
+for li, (yp, fac, src) in enumerate(LEVELS):
+    hw = np.interp(src if src else yp, nm_rows, nm_hw) * fac
+    tt = (yp - 470) / (Y_CUT - 470)
+    rz = 0.84 * np.interp(min(yp, 700), nm_rows, nm_hw)
+    nzc = nz0 - 0.10 * half_w * tt
     ring = []
     for s in range(SIDES):
-        a = 2 * math.pi * s / SIDES + math.pi / SIDES
-        verts.append([cx + math.sin(a) * rx * sx, y, nz + dz + math.cos(a) * rz * sx]); ring.append(len(verts) - 1)
+        a = 2 * math.pi * s / SIDES
+        sa, ca = math.sin(a), math.cos(a)
+        r = 1.0
+        # sternocleidomastoid: two ridges from behind the ears converging toward the throat
+        a_scm = 1.25 - 0.75 * tt
+        r += 0.035 * math.sin(math.pi * min(1, max(0, (tt - 0.1) / 0.8))) * (
+            math.exp(-((a - a_scm) / 0.22) ** 2) + math.exp(-((a - (2 * math.pi - a_scm)) / 0.22) ** 2))
+        # Adam's apple
+        da = min(a, 2 * math.pi - a)
+        r += 0.045 * math.exp(-((yp - 625) / 28) ** 2) * math.exp(-(da / 0.28) ** 2)
+        zr = rz * (0.92 if ca < 0 else 1.0)
+        y = yp
+        if li == len(LEVELS) - 1:
+            y = yp + 40 * max(0.0, ca) ** 4            # V-shaped cut at the front
+        verts.append([ncx + sa * hw * r, -y, nzc + ca * zr * r]); ring.append(len(verts) - 1)
     nrings.append(ring)
 Vt = np.array(verts)
 for k in range(len(nrings) - 1):
@@ -398,12 +554,198 @@ for k in range(len(nrings) - 1):
         s2 = (s + 1) % SIDES
         for t in ([nrings[k][s], nrings[k + 1][s], nrings[k + 1][s2]], [nrings[k][s], nrings[k + 1][s2], nrings[k][s2]]):
             a, b, c = Vt[t]; cen = (a + b + c) / 3
-            if np.cross(b - a, c - a) @ (cen - np.array([cx, cen[1], nz])) < 0:
+            if np.cross(b - a, c - a) @ (cen - np.array([ncx, cen[1], nz0])) < 0:
                 t = [t[0], t[2], t[1]]
-            tris.append(t); region.append(5)
-verts.append([cx, neck_bot, nz + 0.10 * half_w]); cap = len(verts) - 1
+            tris.append(t); region.append(5); band.append(-1); part.append('neck')
+_bot = Vt[nrings[-1]]
+verts.append([ncx, _bot[:, 1].mean(), _bot[:, 2].mean()]); cap = len(verts) - 1
 for s in range(SIDES):
-    tris.append([cap, nrings[-1][(s + 1) % SIDES], nrings[-1][s]]); region.append(7)
+    tris.append([cap, nrings[-1][(s + 1) % SIDES], nrings[-1][s]]); region.append(7); band.append(-1); part.append('cut')
+
+# ---------------- shirt: shoulders, chest, collar and a button, shaped on the photo ----------------
+# A bust cut: shoulders slope out from the neck the way the photo's shoulder line does and are
+# cut at the sides; the front stays behind the throat until the open neckline, then becomes the
+# chest. Collar band stands around the back and sides of the neck; the two collar points are
+# traced from the photo and lie on the chest. Colours come from the photo like everything else.
+TCX = ncx
+ZC_T = nz0 - 0.08 * half_w
+W_MAX = 330.0
+P_SE = 2.6                       # superellipse exponent: rounder than a box, flatter than an ellipse
+neck_hw0 = float(np.interp(640, nm_rows, nm_hw))
+neck_rz0 = 0.84 * float(np.interp(640, nm_rows, nm_hw))
+
+
+def t_w(y):
+    """torso half width at photo row y (shoulder line measured from the photo, cut at W_MAX)"""
+    if y <= 693:
+        w = np.interp(y, [640, 693], [neck_hw0 + 10, 190])
+    else:
+        w = 190 + (y - 693) / 0.47
+    return min(W_MAX, w)
+
+
+def t_df(y):     # depth in front of the centre: inside the throat until the neckline opens
+    return float(np.interp(y, [640, 760, 835, 950], [0.80 * neck_rz0, 0.86 * neck_rz0, 186, 192]))
+
+
+def p_se(y):     # round like the neck at the top, flatter chest lower down
+    return float(np.interp(y, [640, 760, 835], [2.0, 2.0, P_SE]))
+
+
+def t_db(y):     # depth behind the centre: back of the neck -> upper back
+    return float(np.interp(y, [640, 700, 780, 950], [neck_rz0 * 0.95 + 8, 150, 172, 176]))
+
+
+def se(c, p):
+    return math.copysign(abs(c) ** (2 / p), c)
+
+
+def torso_pt(y, a):
+    sa, ca = math.sin(a), math.cos(a)
+    d = t_df(y) if ca >= 0 else t_db(y)
+    p = p_se(y)
+    return [TCX + t_w(y) * se(sa, p), -y, ZC_T + d * se(ca, p)]
+
+
+def torso_front_z(x, y):
+    """z of the torso's front surface at photo pixel (x, y)"""
+    y = max(y, 640.0)
+    u = min(0.999, abs(x - TCX) / t_w(y))
+    p = p_se(y)
+    return ZC_T + t_df(y) * (1 - u ** p) ** (1 / p)
+
+
+def neck_front_z(x, y):
+    hw = float(np.interp(min(max(y, 560), 700), nm_rows, nm_hw)); rz = 0.84 * hw
+    u = abs(x - ncx) / hw
+    if u >= 1:
+        return -1e9
+    zc_ = nz0 - 0.10 * half_w * (y - 470) / (Y_CUT - 470)
+    return zc_ + rz * math.sqrt(1 - u * u)
+
+
+TS = 56
+Y_TOP_RINGS = [640, 652, 664, 676, 688, 700, 712, 724, 736, 748, 760]
+N_LOW = 9
+y_bottom = lambda a: 945 - 80 * abs(math.sin(a)) ** 1.6      # bust cut: lowest at the front centre
+trings = []
+for y in Y_TOP_RINGS:
+    trings.append([None] * TS)
+    for s in range(TS):
+        verts.append(torso_pt(y, 2 * math.pi * s / TS)); trings[-1][s] = len(verts) - 1
+for k in range(1, N_LOW + 1):
+    tt = k / N_LOW
+    ring = []
+    for s in range(TS):
+        a = 2 * math.pi * s / TS
+        y = 760 + (y_bottom(a) - 760) * tt
+        verts.append(torso_pt(y, a)); ring.append(len(verts) - 1)
+    trings.append(ring)
+Vt = np.array(verts)
+torso_axis = np.array([TCX, 0, ZC_T])
+for k in range(len(trings) - 1):
+    for s in range(TS):
+        s2 = (s + 1) % TS
+        for t in ([trings[k][s], trings[k + 1][s], trings[k + 1][s2]], [trings[k][s], trings[k + 1][s2], trings[k][s2]]):
+            a_, b_, c_ = Vt[t]; cen = (a_ + b_ + c_) / 3
+            out = cen - np.array([TCX, cen[1], ZC_T]); out[1] = 0
+            if k < 2:
+                out[1] = 0.6 * np.linalg.norm(out)      # shoulder tops face up and out
+            if np.cross(b_ - a_, c_ - a_) @ out < 0:
+                t = [t[0], t[2], t[1]]
+            tris.append(t); region.append(9); band.append(-1); part.append('shirt')
+_bot = Vt[trings[-1]]
+verts.append([TCX, _bot[:, 1].mean(), _bot[:, 2].mean()]); tcap = len(verts) - 1
+for s in range(TS):
+    tris.append([tcap, trings[-1][(s + 1) % TS], trings[-1][s]]); region.append(7); band.append(-1); part.append('shirtcut')
+
+
+# collar band: stands around the back and sides of the neck, dipping toward the open front
+def neck_r_at(y, a):
+    hw = float(np.interp(min(max(y, 560), 700), nm_rows, nm_hw)); rz = 0.84 * hw
+    zc_ = nz0 - 0.10 * half_w * (y - 470) / (Y_CUT - 470)
+    sa, ca = math.sin(a), math.cos(a)
+    return ncx + sa * hw, zc_ + ca * rz * (0.92 if ca < 0 else 1.0)
+
+
+BAND_A0 = 1.38                    # band only at the sides and back: from the front it shows just beside the neck, never on it
+NB_C = 40
+band_rows = []
+for row, (hgt, scale_r) in enumerate([(0.0, 1.02), (0.0, 1.09), (0.5, 1.10), (1.0, 1.11)]):
+    ring = []
+    for j in range(NB_C + 1):
+        a = BAND_A0 + (2 * math.pi - 2 * BAND_A0) * j / NB_C
+        y_t = 594 + 150 * max(0.0, math.cos(a)) ** 2.2
+        y = y_t + hgt * 42
+        x0_, z0_ = neck_r_at(y, a)
+        x = ncx + (x0_ - ncx) * scale_r
+        z = nz0 + (z0_ - nz0) * scale_r
+        verts.append([x, -y, z]); ring.append(len(verts) - 1)
+    band_rows.append(ring)
+Vt = np.array(verts)
+for r_ in range(len(band_rows) - 1):
+    for j in range(NB_C):
+        for t in ([band_rows[r_][j], band_rows[r_ + 1][j], band_rows[r_ + 1][j + 1]],
+                  [band_rows[r_][j], band_rows[r_ + 1][j + 1], band_rows[r_][j + 1]]):
+            a_, b_, c_ = Vt[t]; cen = (a_ + b_ + c_) / 3
+            out = cen - np.array([ncx, cen[1], nz0]); out[1] = 0
+            if r_ == 0:
+                out = np.array([0, 1.0, 0])                     # the folded top edge faces up
+            if np.cross(b_ - a_, c_ - a_) @ out < 0:
+                t = [t[0], t[2], t[1]]
+            tris.append(t); region.append(9); band.append(-1); part.append('collarband')
+
+# collar points, traced from the photo (pixel outlines), laid on the chest with a little loft
+FLAPS = [
+    [(316, 600), (290, 650), (265, 692), (262, 740), (265, 828), (300, 800), (340, 772), (360, 762),
+     (345, 725), (333, 690), (323, 640)],
+    [(592, 585), (615, 625), (640, 670), (667, 720), (663, 780), (657, 830), (625, 800), (595, 775),
+     (580, 763), (590, 720), (595, 670), (597, 620)],
+]
+for poly in FLAPS:
+    poly = np.array(poly, float)
+    pth = Path(poly)
+    pts = list(poly)
+    gx0, gy0 = poly.min(0); gx1, gy1 = poly.max(0)
+    for gy_ in np.arange(gy0 + 6, gy1, 12):
+        for gx_ in np.arange(gx0 + 6, gx1, 12):
+            if pth.contains_point([gx_, gy_], radius=-4):
+                pts.append(np.array([gx_ + rng0.uniform(-2, 2), gy_ + rng0.uniform(-2, 2)]))
+    pts = np.array(pts)
+    dl = Delaunay(pts)
+    # inner edge (along the neck) is the fold: lift it more, so the collar rolls over
+    inner = poly[np.argmin(poly[:, 1])]
+    base_i = len(verts)
+    for x, y in pts:
+        zt = max(torso_front_z(x, y), neck_front_z(x, y) - 18)
+        d_in = min(np.hypot(*(np.array([x, y]) - p_)) for p_ in poly[-4:])
+        lift = 7 + 9 * math.exp(-d_in / 25)
+        verts.append([x, -y, zt + lift])
+    Vt = np.array(verts)
+    for s_ in dl.simplices:
+        if not pth.contains_point(pts[s_].mean(0), radius=-0.5):
+            continue
+        t = [base_i + int(i) for i in s_]
+        a_, b_, c_ = Vt[t]
+        if np.cross(b_ - a_, c_ - a_)[2] < 0:
+            t = [t[0], t[2], t[1]]
+        tris.append(t); region.append(9); band.append(-1); part.append('flap')
+
+# the top button, as in the photo
+BX, BY, BR = 465.0, 917.0, 9.5
+bz = torso_front_z(BX, BY) + 3.5
+verts.append([BX, -BY, bz + 1.5]); bc_ = len(verts) - 1
+brim = []
+for k in range(10):
+    a = 2 * math.pi * k / 10
+    verts.append([BX + BR * math.cos(a), -(BY + BR * math.sin(a)), bz]); brim.append(len(verts) - 1)
+Vt = np.array(verts)
+for k in range(10):
+    t = [bc_, brim[k], brim[(k + 1) % 10]]
+    a_, b_, c_ = Vt[t]
+    if np.cross(b_ - a_, c_ - a_)[2] < 0:
+        t = [t[0], t[2], t[1]]
+    tris.append(t); region.append(10); band.append(-1); part.append('button')
 
 # ---------------- colour from the photo ----------------
 def rasterize(V, T):
@@ -444,10 +786,11 @@ def pixel_groups(idb, n):
     return [order[st[i]:en[i]] for i in range(n)]
 
 
-# adaptive detail: split face facets that cover a lot of colour change (eyes, brows,
-# moustache, lips, nostrils) into 4, up to 3 times. Smooth skin keeps big sheets.
+# adaptive detail: split facets that cover a lot of colour change into 4, up to 3 times —
+# on the face (eyes, brows, moustache, lips, nostrils) and along the hairline, where hair
+# meets skin. Smooth skin keeps big sheets.
 flat_px_all = img.reshape(-1, 3)
-is_face = [True] * face_tris + [False] * (len(tris) - face_tris)
+flat_head = head.ravel()
 mid_cache = {}
 
 
@@ -456,86 +799,184 @@ def midpoint(i, j):
     if key not in mid_cache:
         verts.append(((np.array(verts[i]) + np.array(verts[j])) / 2).tolist())
         mid_cache[key] = len(verts) - 1
+        if i in lock_of and j in lock_of:
+            lock_of[mid_cache[key]] = (lock_of[i] + lock_of[j]) / 2
     return mid_cache[key]
 
 
+def splittable(ti):
+    return part[ti] in ('face', 'shirt', 'flap') or (part[ti] == 'shell' and band[ti] <= KH + 1)
+
+
+ear_r_list = [ear_r.get(i) for i in range(len(tris))]
 for level, (thr, min_px) in enumerate([(9.0, 40), (11.0, 18), (13.0, 9)]):
     V = np.array(verts); T = np.array(tris)
     groups = pixel_groups(rasterize(V, T), len(T))
-    new_tris, new_reg, new_face = [], [], []
+    nt, nr, nb, npart, ner = [], [], [], [], []
     split = 0
     for ti, t in enumerate(tris):
         g = groups[ti]
-        if is_face[ti] and len(g) >= min_px:
+        g = g[flat_head[g]] if part[ti] == 'shell' else g
+        if splittable(ti) and len(g) >= min_px:
             sd = flat_px_all[g].std(0).mean()
             if sd > thr:
                 a, b, c = t
                 ab, bc, ca = midpoint(a, b), midpoint(b, c), midpoint(c, a)
                 for q in ([a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]):
-                    new_tris.append(q); new_reg.append(region[ti]); new_face.append(True)
+                    nt.append(q); nr.append(region[ti]); nb.append(band[ti]); npart.append(part[ti]); ner.append(ear_r_list[ti])
                 split += 1
                 continue
-        new_tris.append(t); new_reg.append(region[ti]); new_face.append(is_face[ti])
-    tris, region, is_face = new_tris, new_reg, new_face
+        nt.append(t); nr.append(region[ti]); nb.append(band[ti]); npart.append(part[ti]); ner.append(ear_r_list[ti])
+    tris, region, band, part, ear_r_list = nt, nr, nb, npart, ner
     print(f'detail pass {level + 1}: split {split} facets -> {len(tris)}')
 
 V = np.array(verts); T = np.array(tris)
+part = np.array(part); region = list(region)
 idb = rasterize(V, T)
-valid = head
 cols = np.full((len(T), 3), np.nan)
-flat_ok = valid.ravel(); flat_px = img.reshape(-1, 3)
+flat_px = img.reshape(-1, 3)
+# pixels on the photo's silhouette edge are blends with the pale background: never sample those
+not_bgish = np.linalg.norm(img - bg, axis=2) > 62
+ok_any = (head & not_bgish).ravel()
+# neck/ear pixels must look like skin: warm (red well above blue) and not in deep shadow;
+# keeps the blue-grey shirt collar and its shadow off the neck
+warm = (img[..., 0] - img[..., 2] > 40) & (luma > 70) & not_bgish
+ok_skin = (skin_px & warm).ravel()
+ok_body = (~is_bg & not_bgish).ravel()          # shirt facets: anything that isn't background
 groups = pixel_groups(idb, len(T))
+cent_y = V[T][:, :, 1].mean(1)
 for ti in range(len(T)):
     idx = groups[ti]
     if len(idx) == 0:
         continue
-    ok = idx[flat_ok[idx]]
+    low_skin = part[ti] == 'shell' and region[ti] == 0 and cent_y[ti] < P[234][1]
+    if part[ti] == 'collarband':
+        continue                                   # the band's own colour comes from the shirt
+    if part[ti] in ('shirt', 'button', 'flap'):
+        okm = ok_body
+    else:
+        okm = ok_skin if (part[ti] in ('neck', 'ear') or low_skin) else ok_any      # collar shadow is not neck
+    ok = idx[okm[idx]]
     if len(ok) >= max(5, 0.4 * len(idx)):
         cols[ti] = np.median(flat_px[ok], 0) * 0.5 + flat_px[ok].mean(0) * 0.5
-    elif len(ok) >= 1:
+    elif len(ok) >= 1 and len(idx) < 12:
         # tiny facet: average a small window at its centre instead of 1-4 noisy pixels
         cxp, cyp = V[T[ti]][:, 0].mean(), -V[T[ti]][:, 1].mean()
         x0_, y0_ = int(max(0, cxp - 1.5)), int(max(0, cyp - 1.5))
         win = img[y0_:y0_ + 3, x0_:x0_ + 3].reshape(-1, 3)
-        cols[ti] = win.mean(0)
+        wok = okm.reshape(IH, IW)[y0_:y0_ + 3, x0_:x0_ + 3].reshape(-1)
+        if wok.any():
+            cols[ti] = win[wok].mean(0)
 
-# hidden facets: borrow from nearest sampled facets of the same kind (hair vs skin)
+LUM = np.array([0.299, 0.587, 0.114])
 cent = V[T].mean(1)
 reg = np.array(region)
-reg0 = np.array(region)
-_l = np.nan_to_num(cols @ np.array([0.299, 0.587, 0.114]), nan=0)
-cols[(reg0 == 1) & (_l > 46)] = np.nan        # hair-band facets that caught skin/edge pixels
+band = np.array(band)
+_l = np.nan_to_num(cols @ LUM, nan=0)
+# what the photo shows wins: dark skin-row facets on the shell are hair, light hair facets get refilled
+to_hair = (part == 'shell') & (reg == 0) & (_l > 0) & (_l < 66)
+reg[to_hair] = 1
+cols[(reg == 1) & (_l > 46) & ~to_hair] = np.nan
+# skin facets that caught a grey blend of shadow + background at the silhouette: refill
+_sat = np.nan_to_num(cols.max(1) - cols.min(1), nan=99)
+cols[(_sat < 38) & (_l > 60) & np.isin(reg, [0, 5, 6])] = np.nan
+# deep shadow between collar and neck reads as a black slab once the head turns: the
+# baked lighting supplies the shade, so these take the shirt colour instead
+cols[(part == 'flap') & (_l > 0) & (_l < 105)] = np.nan       # shadowed collar tops look like stains on the neck
+cols[np.isin(part, ['shirt', 'flap']) & (_l > 0) & (_l < 75) & (np.nan_to_num(cols[:, 2]) >= np.nan_to_num(cols[:, 0]) - 5)] = np.nan
 sampled = ~np.isnan(cols[:, 0])
-lum = np.where(sampled, cols @ np.array([0.299, 0.587, 0.114]) if sampled.any() else 0, np.nan)
-hair_src = sampled & (np.nan_to_num(lum) < 75)
-skin_src = sampled & (np.nan_to_num(lum) >= 75) & (reg != 3) & (reg != 4) & (reg != 2)
+lum = np.nan_to_num(cols @ LUM, nan=-1)
+src_sets = {
+    'hair': sampled & (lum >= 0) & (lum < 75) & (reg == 1),
+    'ear': sampled & (part == 'ear') & (lum >= 70),
+    'neck': sampled & (part == 'neck') & (lum >= 70),
+    'skin': sampled & (lum >= 75) & ~np.isin(reg, [2, 3, 4]) & ~np.isin(part, ['neck', 'shirt', 'button']),
+    'shirt': sampled & np.isin(part, ['shirt', 'flap']) & (cols[:, 2] > cols[:, 0] + 8),
+}
+
+
+_wm = (skin_px & warm)
+_cx = np.clip(cent[:, 0].round().astype(int), 0, IW - 1); _cy = np.clip((-cent[:, 1]).round().astype(int), 0, IH - 1)
+on_skin = _wm[_cy, _cx]
+
+
+def kind_of(ti):
+    if part[ti] == 'shirt' and on_skin[ti]:
+        return 'neck'                  # shirt surface showing through where the photo shows skin
+    if part[ti] in ('shirt', 'shirtcut', 'button', 'collarband', 'flap'):
+        return 'shirt'
+    if reg[ti] == 1:
+        return 'hair'
+    if part[ti] == 'ear':
+        return 'ear' if src_sets['ear'].sum() > 10 else 'skin'
+    if part[ti] in ('neck', 'cut'):
+        return 'neck' if src_sets['neck'].sum() > 10 else 'skin'
+    return 'skin'
+
+
+# hidden hair (back and top of the head): the photo's own hair colour, not whatever
+# brown edge facet happens to be nearest
+hair_core = ndimage.binary_erosion(hair, iterations=4)
+HAIR_COL = np.median(img[hair_core], 0)
+print('hair colour', HAIR_COL.round())
 rng = np.random.default_rng(7)
-for kind, src in (('hair', hair_src), ('skin', skin_src)):
-    tree = cKDTree(cent[src]); srcc = cols[src]
-    for ti in np.nonzero(~sampled)[0]:
-        want_hair = reg[ti] == 1
-        if want_hair != (kind == 'hair'):
-            continue
-        dist, nn = tree.query(cent[ti], k=6)
-        c = srcc[nn].mean(0)
-        if reg[ti] == 7:
-            c = c * 0.8
-        cols[ti] = c * (1 + rng.uniform(-0.05, 0.05))
+trees = {k_: (cKDTree(cent[s_]), cols[s_]) for k_, s_ in src_sets.items() if s_.sum() > 0}
+for ti in np.nonzero(~sampled)[0]:
+    tree, srcc = trees[kind_of(ti)]
+    dist, nn = tree.query(cent[ti], k=6)
+    c = srcc[nn].mean(0)
+    if reg[ti] == 1:
+        w_ = min(1.0, dist.mean() / (0.25 * half_w))      # far from any seen hair -> photo hair colour
+        c = c * (1 - w_) + HAIR_COL * w_
+    if part[ti] in ('cut', 'shirtcut'):
+        c = c * 0.8
+    if part[ti] == 'collarband':
+        c = c * 0.93
+    cols[ti] = c * (1 + rng.uniform(-0.05, 0.05))
 cols = np.clip(np.nan_to_num(cols, nan=150), 0, 255)
+
+# crisp hairline: hair facets that caught a brown blend of hair + forehead lean to the hair colour
+_lh = cols @ LUM
+_m = (reg == 1) & (_lh > 36)
+_w = np.clip((_lh[_m] - 36) / 30, 0, 0.75)[:, None]
+cols[_m] = cols[_m] * (1 - _w) + HAIR_COL * _w
+
+# hair sheen: lock ridges catch a little light, grooves sit darker — reads as strands
+for ti in np.nonzero(reg == 1)[0]:
+    lv = [lock_of.get(int(v_)) for v_ in T[ti]]
+    lv = [x for x in lv if x is not None]
+    if not lv:
+        continue
+    m_ = float(np.mean(lv))
+    gain = (0.93 + 0.16 * m_) if sampled[ti] else (0.82 + 0.34 * m_)
+    cols[ti] = np.clip(cols[ti] * gain * (1 + rng.uniform(-0.04, 0.04)), 0, 255)
+
+# ears: deeper concha, shaded back of the ear
+for ti in np.nonzero(part == 'ear')[0]:
+    rp = ear_r_list[ti]
+    if rp is None:
+        continue
+    if rp >= 2:
+        cols[ti] = cols[ti] * 0.86
+    elif rp < 0.4 and not sampled[ti]:
+        cols[ti] = cols[ti] * np.array([0.84, 0.78, 0.76])
+    elif 0.75 < rp < 0.86 and not sampled[ti]:
+        cols[ti] = cols[ti] * 0.92            # scapha groove behind the helix rim
+
 # clean round irises: facets inside the iris circle take the iris colour (catchlight removed)
-cent2 = V[T].mean(1)
+cent2 = cent
 for c_, ring in ((468, range(469, 473)), (473, range(474, 478))):
     r_ = np.mean([np.linalg.norm(P[i][:2] - P[c_][:2]) for i in ring])
     yy0, xx0 = int(-P[c_][1]), int(P[c_][0]); R_ = int(r_)
     patch = img[yy0 - R_:yy0 + R_, xx0 - R_:xx0 + R_].reshape(-1, 3)
-    iris_col = np.median(patch[(patch @ np.array([0.299, 0.587, 0.114])) < 70], 0)
-    din = np.hypot(cent2[:, 0] - P[c_][0], cent2[:, 1] - P[c_][1])
-    m = (din < r_ * 0.8) & np.isin(np.array(region), [3, 8, 0]) & (cent2[:, 2] > P[c_][2] - 0.2 * half_w)
+    iris_col = np.median(patch[(patch @ LUM) < 70], 0)
+    din_ = np.hypot(cent2[:, 0] - P[c_][0], cent2[:, 1] - P[c_][1])
+    m = (din_ < r_ * 0.8) & np.isin(reg, [3, 8, 0]) & (part == 'face') & (cent2[:, 2] > P[c_][2] - 0.2 * half_w)
     cols[m] = iris_col
     # one small catchlight, like the photo
     ang_ = math.radians(40)
     hx, hy = P[c_][0] + 0.35 * r_ * math.cos(ang_), P[c_][1] + 0.35 * r_ * math.sin(ang_)
-    hl = np.argmin(np.hypot(cent2[:, 0] - hx, cent2[:, 1] - hy) + 1e3 * (cent2[:, 2] < P[c_][2] - 0.2 * half_w))
+    hl = np.argmin(np.hypot(cent2[:, 0] - hx, cent2[:, 1] - hy) + 1e3 * (cent2[:, 2] < P[c_][2] - 0.2 * half_w) + 1e3 * (part != 'face'))
     cols[hl] = np.array([225, 228, 235])
 
 # despeckle: tiny facets that disagree strongly with their neighbours take the neighbour average
@@ -545,20 +986,23 @@ for ti, t in enumerate(T):
         vt.setdefault(int(v_), []).append(ti)
 _e1 = V[T][:, 1, :2] - V[T][:, 0, :2]; _e2 = V[T][:, 2, :2] - V[T][:, 0, :2]
 area = 0.5 * np.abs(_e1[:, 0] * _e2[:, 1] - _e1[:, 1] * _e2[:, 0])
-lumv = cols @ np.array([0.299, 0.587, 0.114])
-for ti in np.nonzero(area < 8)[0]:
-    nb = {n for v_ in T[ti] for n in vt[int(v_)]} - {ti}
-    if not nb:
+lumv = cols @ LUM
+for ti in np.nonzero((area < 8) & (part == 'face'))[0]:
+    nb_ = {n for v_ in T[ti] for n in vt[int(v_)]} - {ti}
+    if not nb_:
         continue
-    nb = list(nb); avg = cols[nb].mean(0)
-    if abs(lumv[ti] - avg @ np.array([0.299, 0.587, 0.114])) > 55 and region[ti] not in (3, 8):
+    nb_ = list(nb_); avg = cols[nb_].mean(0)
+    if abs(lumv[ti] - avg @ LUM) > 55 and reg[ti] not in (3, 8):
         cols[ti] = avg
 
-eye_m = np.isin(np.array(region), [3, 8])
+eye_m = np.isin(reg, [3, 8])
 g = cols[eye_m].mean(1, keepdims=True)
 cols[eye_m] = g + (cols[eye_m] - g) * 0.7
 
 # ---------------- normalise + write ----------------
+used = np.unique(T)
+remap = -np.ones(len(V), int); remap[used] = np.arange(len(used))
+V = V[used]; T = remap[T]
 center = np.array([cx, (V[:, 1].max() + V[:, 1].min()) / 2, z_ear])
 sc = (V[:, 1].max() - V[:, 1].min()) / 2
 Vn = (V - center) / sc
@@ -566,8 +1010,11 @@ hexes = ['%02x%02x%02x' % tuple(int(round(v)) for v in c) for c in cols]
 json.dump({
     'positions': [round(float(x), 4) for x in Vn.reshape(-1)],
     'triangles': [int(i) for t in T for i in t],
-    'regions': [int(r) for r in region],
+    'regions': [int(r) for r in reg],
     'colors': hexes,
     'faceTriangles': face_tris,
-}, open(OUT, 'w'))
+    **({'parts': [str(p_) for p_ in part]} if __import__('os').environ.get('FACE_DEBUG') else {}),
+}, open(OUT, 'w'), separators=(',', ':'))
 print('verts', len(V), 'tris', len(T), 'face tris', face_tris, 'sampled', int(sampled.sum()), 'filled', int((~sampled).sum()))
+for p_ in ('face', 'shell', 'ear', 'neck', 'cut', 'shirt', 'shirtcut', 'button', 'collarband', 'flap'):
+    print(' ', p_, int((part == p_).sum()))

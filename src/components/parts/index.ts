@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import type { PartKey } from '@/content/types';
+import type { PartKey, Stop } from '@/content/types';
 import AiChip from './AiChip';
 import CacheStack from './CacheStack';
 import Cores from './Cores';
@@ -16,6 +16,8 @@ export interface PartProps {
   count?: number;
   /** true while the visitor is parked at this stop */
   active?: boolean;
+  /** the stop's content, for parts that show it in 3D (skill balls on the cores) */
+  data?: Stop;
 }
 
 /** Maps each stop's `part` key to its 3D model. */

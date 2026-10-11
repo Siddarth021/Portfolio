@@ -6,7 +6,7 @@ import mesh from './faceMesh.json';
 
 /**
  * Siddarth's head as flat cut planes, each coloured from his photo.
- * Geometry + colours come from scripts/face/build_face2.py (face-mesh landmarks of a
+ * Geometry + colours come from scripts/face/build_face.py (face-mesh landmarks of a
  * front photo -> faceted head, every facet = mean colour of the photo pixels it covers).
  * `progress` (0..1) drives the facets flying into place, so the boot screen can
  * assemble the face while its lines load.
@@ -149,7 +149,7 @@ export default function FacePortrait({ progress }: { progress: number }) {
   return (
     <Canvas
       dpr={[1, 2]}
-      camera={{ fov: 19, near: 0.1, far: 50, position: [0, 0.02, 8.7] }}
+      camera={{ fov: 19, near: 0.1, far: 50, position: [0, -0.03, 7.9] }}
       flat
       gl={{ antialias: true, alpha: true }}
       style={{ width: '100%', height: '100%' }}

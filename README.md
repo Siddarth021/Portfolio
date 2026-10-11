@@ -41,6 +41,7 @@ src/
     parts/              One file per computer part
       kit.tsx           Shared matte materials + Box / Cyl / Many helpers
       Cpu  Motherboard  Cores  RamKit  CacheStack
+      SkillBalls        Skill logos as balls over the cores (hover / click / throw)
       M2Ssd  AiChip  GpuCard  PowerSupply  IoPanel
       index.ts          part key → model
     ui/                 Boot screen, brand header, palette switch
@@ -86,7 +87,7 @@ of code — see **Versioning** below for how that fits in without a rewrite.
 
 ## The faceted face on the start page
 
-`src/components/face/FacePortrait.tsx` renders your head as ~4,300 flat facets and
+`src/components/face/FacePortrait.tsx` renders your head and shoulders as ~16,300 flat facets and
 assembles it while the boot lines load. Geometry and colours live in
 `faceMesh.json` next to it, generated once from a front-facing photo by
 `scripts/face/build_face.py`:
@@ -96,8 +97,11 @@ assembles it while the boot lines load. Geometry and colours live in
 2. **Face:** every landmark, plus extra points along the photo's strong edges
    (eyelids, brows, lips, moustache, nostrils) and a fine grid inside each eye,
    cut into flat triangles.
-3. **Head:** hair, ears and neck generated around the face; the hairline and hair
-   outline are traced from the photo.
+3. **Head:** hair, ears and neck generated around the face. The hairline and hair
+   outline are traced from the photo and the hair carries ~30 locks; each ear's
+   height and spread, and the neck's width, are measured from the photo row by row.
+   Shoulders and chest follow the photo's shoulder line; the shirt collar points
+   are traced from the photo and laid on the chest, plus the top button.
 4. **Colour:** each facet takes the average colour of the photo pixels it covers;
    facets the photo can't see (back of the head) copy their nearest neighbours.
    Facets covering a lot of colour change are split into 4 (up to 3 times), so

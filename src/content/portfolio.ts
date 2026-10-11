@@ -62,7 +62,7 @@ export const stops: Stop[] = [
     file: 'skills.sys',
     cta: 'Open',
     blocks: [
-      { type: 'text', text: 'One core per skill set. Hover a skill to flip it.' },
+      { type: 'text', text: 'One core per skill set. Every ball on the die is a skill: hover, click or throw one. Hover a chip below to flip it.' },
       { type: 'skills', groups: [
         { name: 'Machine learning', skills: [
           { name: 'PyTorch', icon: 'pytorch' }, { name: 'TensorFlow', icon: 'tensorflow' },
@@ -147,7 +147,7 @@ export const stops: Stop[] = [
     blocks: [
       { type: 'cards', items: [
         { title: 'ECGAN++', body: 'Edge-guided GANs for semantic image synthesis, extended with hierarchical graph contrastive learning.', tags: ['GANs', 'Contrastive learning'], url: gh('ECGAN'), linkLabel: 'View repo' },
-        { title: 'RHG-CLIP', meta: '92.65% base accuracy · CIFAR-100', body: 'CLIP + GNN with Riemannian Hamiltonian dynamics for few-shot class-incremental learning.', tags: ['CLIP', 'GNN', 'Few-shot'], url: gh('FSCIL_Improved'), linkLabel: 'View repo' },
+        { title: 'RHG-CLIP', meta: '92.65% base accuracy · CIFAR-100', body: 'CLIP + GNN with Riemannian Hamiltonian dynamics for few-shot class-incremental learning.', tags: ['CLIP', 'GNN', 'Few-shot'], url: null },
       ] },
     ],
   },
